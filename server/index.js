@@ -67,7 +67,7 @@ app.get('/admin', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>にゃんこ大戦争 - 管理画面</title>
+            <title>管理画面</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; }
                 .container { max-width: 1200px; margin: 0 auto; }
@@ -83,7 +83,7 @@ app.get('/admin', (req, res) => {
         </head>
         <body>
             <div class="container">
-                <h1>🐱 にゃんこ大戦争 管理画面</h1>
+                <h1>管理画面</h1>
                 <div class="stats" id="stats"></div>
                 <div class="actions">
                     <a href="#" class="btn" onclick="generateCSV()">CSV生成</a>
