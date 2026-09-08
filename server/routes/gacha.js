@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose'); // 不足していたインポートを追加
+const mongoose = require('mongoose');
 const { protect } = require('../middleware/auth');
 const Player = require('../models/Player');
 const Cat = require('../models/Cat');
@@ -8,173 +8,74 @@ const fs = require('fs').promises;
 const path = require('path');
 const csv = require('csv-parser');
 const { createReadStream } = require('fs');
-
-// --- キャッシュ設定 ---
-let gachaRatesCache = null;
-let lastCacheUpdate = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5分間有効
-
-/**
- * CSVからガチャ確率を読み込む (キャッシュ機能付き)
- */
+let gachaRatesCache = null, lastCacheUpdate = null;
+const CACHE_DURATION = 5 * 60 * 1000;
 const getGachaRates = async () => {
     const now = Date.now();
-    if (gachaRatesCache && lastCacheUpdate && (now - lastCacheUpdate) < CACHE_DURATION) {
-        return gachaRatesCache;
-    }
-    
-    try {
-        const rates = [];
-        const filePath = path.join(__dirname, '../data/csv/gacha_rates.csv');
-        
-        await fs.access(filePath); // 存在確認
-        
-        await new Promise((resolve, reject) => {
-            createReadStream(filePath)
-                .pipe(csv())
-                .on('data', (data) => {
-                    if (data.ガチャタイプ && data.レアリティ && data['確率(%)']) {
-                        rates.push({
-                            type: data.ガチャタイプ,
-                            rarity: data.レアリティ,
-                            rate: parseFloat(data['確率(%)'])
-                        });
-                    }
-                })
-                .on('end', () => {
-                    const totalRate = rates.reduce((sum, item) => sum + item.rate, 0);
-                    if (Math.abs(totalRate - 100) > 0.01) {
-                        console.warn(`[Gacha] 確率合計異常: ${totalRate}%`);
-                    }
-                    resolve();
-                })
-                .on('error', reject);
-        });
-        
-        gachaRatesCache = rates;
-        lastCacheUpdate = now;
-        return rates;
-    } catch (error) {
-        console.error('ガチャ確率読み込みエラー:', error);
-        throw error;
-    }
+    if (gachaRatesCache && lastCacheUpdate && now - lastCacheUpdate < CACHE_DURATION) return gachaRatesCache;
+    const rates = [];
+    const filePath = path.join(__dirname, '../data/csv/gacha_rates.csv');
+    await fs.access(filePath);
+    await new Promise((resolve, reject) => createReadStream(filePath).pipe(csv())
+        .on('data', d => { if (d.ガチャタイプ && d.レアリティ && d['確率(%)']) rates.push({ type: d.ガチャタイプ, rarity: d.レアリティ, rate: parseFloat(d['確率(%)']) }); })
+        .on('end', resolve).on('error', reject));
+    gachaRatesCache = rates; lastCacheUpdate = now; return rates;
 };
-
-/**
- * 抽選ロジック
- */
-const drawGacha = (rates, gachaType = 'normal') => {
-    const filteredRates = rates.filter(r => r.type === gachaType);
-    if (filteredRates.length === 0) throw new Error(`タイプ不明: ${gachaType}`);
-    
-    const roll = Math.random() * 100;
-    let accumulatedRate = 0;
-    
-    for (const rate of filteredRates) {
-        accumulatedRate += rate.rate;
-        if (roll <= accumulatedRate) return rate.rarity;
-    }
-    return filteredRates[filteredRates.length - 1].rarity;
+const drawGacha = (rates, type = 'normal') => {
+    const filtered = rates.filter(r => r.type === type);
+    if (!filtered.length) throw new Error(`タイプ不明: ${type}`);
+    const roll = Math.random() * 100; let sum = 0;
+    for (const r of filtered) { sum += r.rate; if (roll <= sum) return r.rarity; }
+    return filtered[filtered.length - 1].rarity;
 };
+const catPayload = (cat, level = 1) => ({
+    id: cat.ID, name: cat.名前, rarity: cat.レアリティ, level,
+    attack: Number(cat.基本攻撃力 || 0), defense: Number(cat.基本防御力 || 0), health: Number(cat.基本体力 || 0),
+    speed: Number(cat.速度 || 1), criticalRate: 0.05, criticalDamage: 1.5, element: cat.タイプ || 'none',
+    isFavorite: false, isInTeam: false, teamPosition: null, skills: [], createdFromGacha: true,
+    battleCount: 0, winCount: 0, createdAt: new Date().toISOString()
+});
 
-// --- APIエンドポイント ---
-
-/**
- * @route   POST /api/gacha/roll
- * @desc    単発ガチャ
- */
 router.post('/roll', protect, async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    
     try {
-        const { gachaType = 'normal' } = req.body;
-        const COST = 150; // 単発コスト
-
-        const player = await Player.findOne({ userId: req.user.id }).session(session);
-        if (!player) throw new Error('PlayerNotFound');
+        const COST = 150, player = await Player.findOne({ userId: req.user._id });
+        if (!player) return res.status(404).json({ success: false, message: 'PlayerNotFound' });
         if (player.points < COST) return res.status(400).json({ success: false, message: 'NP不足' });
-
-        const allRates = await getGachaRates();
-        const selectedRarity = drawGacha(allRates, gachaType);
-
-        const possibleCats = await Cat.find({ レアリティ: selectedRarity }).session(session);
-        if (possibleCats.length === 0) throw new Error('NoCatsInRarity');
-
-        const wonCat = possibleCats[Math.floor(Math.random() * possibleCats.length)];
-
-        // プレイヤー更新
+        const rarity = drawGacha(await getGachaRates(), req.body.type || req.body.gachaType || 'normal');
+        const cats = await Cat.find({ レアリティ: rarity });
+        if (!cats.length) return res.status(500).json({ success: false, message: '該当レアリティの猫がありません' });
+        const won = cats[Math.floor(Math.random() * cats.length)];
+        const existing = player.ownedCats.find(c => c.catId === won.ID);
+        if (existing) existing.level += 1; else player.ownedCats.push({ catId: won.ID, level: 1 });
         player.points -= COST;
-        const existingCat = player.ownedCats.find(c => c.catId === wonCat.ID);
-        if (existingCat) {
-            existingCat.level += 1;
-        } else {
-            player.ownedCats.push({ catId: wonCat.ID, level: 1, obtainedAt: new Date() });
-        }
-
-        await player.save({ session });
-        await session.commitTransaction();
-
-        res.json({
-            success: true,
-            cat: { id: wonCat.ID, name: wonCat.名前, rarity: wonCat.レアリティ }, // 名前フィールドに注意
-            remainingPoints: player.points
-        });
-    } catch (err) {
-        await session.abortTransaction();
-        res.status(500).json({ success: false, message: err.message });
-    } finally {
-        session.endSession();
-    }
+        player.progress = { ...(player.progress || {}), gachaCount: Number(player.progress?.gachaCount || 0) + 1 };
+        await player.save();
+        res.json({ success: true, data: { cat: catPayload(won, existing ? existing.level : 1), remainingPoints: player.points, message: 'ガチャ結果' } });
+    } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-/**
- * @route   POST /api/gacha/multi-roll
- * @desc    10連ガチャ (保証付き)
- */
 router.post('/multi-roll', protect, async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    
     try {
-        const COST = 1500; 
-        const GUARANTEE_RARITY = '超激レア'; // CSVの内容に合わせる
-
-        const player = await Player.findOne({ userId: req.user.id }).session(session);
+        const COST = 1500, GUARANTEE = '超激レア';
+        const player = await Player.findOne({ userId: req.user._id });
+        if (!player) return res.status(404).json({ success: false, message: 'PlayerNotFound' });
         if (player.points < COST) return res.status(400).json({ success: false, message: 'NP不足' });
-
-        const allRates = await getGachaRates();
-        const results = [];
-        let hasGuaranteed = false;
-
+        const rates = await getGachaRates(), results = [];
+        let guaranteed = false;
         for (let i = 0; i < 10; i++) {
-            let rarity = (i === 9 && !hasGuaranteed) ? GUARANTEE_RARITY : drawGacha(allRates);
-            if (rarity === GUARANTEE_RARITY) hasGuaranteed = true;
-
-            const possibleCats = await Cat.find({ レアリティ: rarity }).session(session);
-            const wonCat = possibleCats[Math.floor(Math.random() * possibleCats.length)];
-
-            const existingCat = player.ownedCats.find(c => c.catId === wonCat.ID);
-            if (existingCat) {
-                existingCat.level += 1;
-            } else {
-                player.ownedCats.push({ catId: wonCat.ID, level: 1 });
-            }
-
-            results.push({ id: wonCat.ID, name: wonCat.名前, rarity });
+            const rarity = (i === 9 && !guaranteed) ? GUARANTEE : drawGacha(rates, req.body.type || req.body.gachaType || 'normal');
+            if (rarity === GUARANTEE) guaranteed = true;
+            const cats = await Cat.find({ レアリティ: rarity });
+            if (!cats.length) continue;
+            const won = cats[Math.floor(Math.random() * cats.length)];
+            const existing = player.ownedCats.find(c => c.catId === won.ID);
+            if (existing) existing.level += 1; else player.ownedCats.push({ catId: won.ID, level: 1 });
+            results.push(catPayload(won, existing ? existing.level : 1));
         }
-
         player.points -= COST;
-        await player.save({ session });
-        await session.commitTransaction();
-
-        res.json({ success: true, results, remainingPoints: player.points });
-    } catch (err) {
-        await session.abortTransaction();
-        res.status(500).json({ success: false, message: err.message });
-    } finally {
-        session.endSession();
-    }
+        player.progress = { ...(player.progress || {}), gachaCount: Number(player.progress?.gachaCount || 0) + 10 };
+        await player.save();
+        res.json({ success: true, data: { cats: results, remainingPoints: player.points, message: '10連ガチャ結果' } });
+    } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
-
 module.exports = router;
