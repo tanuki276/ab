@@ -1,38 +1,16 @@
-const express = require('express');
-const router = express.Router();
-const { protect } = require('../middleware/auth');
-const Battle = require('../models/Battle');
-
-router.post('/start', protect, async (req, res) => {
-    try {
-        const battle = await Battle.create({ userId: req.user._id, mapId: req.body.mapId || null });
-        res.status(201).json({ success: true, battle });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-router.post('/:id/end', protect, async (req, res) => {
-    try {
-        const battle = await Battle.findOneAndUpdate(
-            { _id: req.params.id, userId: req.user._id },
-            { result: req.body.result || 'draw', score: Number(req.body.score) || 0, rewards: req.body.rewards || {}, endedAt: new Date() },
-            { new: true, runValidators: true }
-        );
-        if (!battle) return res.status(404).json({ success: false, message: 'バトルが見つかりません' });
-        res.json({ success: true, battle });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-router.get('/history', protect, async (req, res) => {
-    try {
-        const battles = await Battle.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(50);
-        res.json({ success: true, battles });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-module.exports = router;
+const express=require('express');
+const router=express.Router();
+const {protect}=require('../middleware/auth');
+const Battle=require('../models/Battle');
+const Player=require('../models/Player');
+const Map=require('../models/Map');
+const Enemy=require('../models/Enemy');
+const Cat=require('../models/Cat');
+const cat=(c,l=1)=>({id:c.ID,name:c.名前,rarity:c.レアリティ||'normal',level:l,attack:Number(c.基本攻撃力||0),defense:Number(c.基本防御力||0),health:Number(c.基本体力||0),speed:Number(c.速度||1),criticalRate:.05,criticalDamage:1.5,element:c.タイプ||'none',isFavorite:false,isInTeam:false,teamPosition:null,skills:[],createdFromGacha:true,battleCount:0,winCount:0,createdAt:new Date().toISOString()});
+const mapOut=m=>({id:m.ID,name:m.名前,chapter:Number(m.章||1),stage:Number(m.ステージ||1),enemyIds:String(m.敵IDリスト||'').split(',').map(x=>x.trim()).filter(Boolean),enemyLevel:Number(m.敵レベル||1),expReward:Number(m.獲得経験値||0),pointReward:Number(m.獲得ポイント||0),clearCondition:m.クリア条件||'敵を全滅',turnLimit:Number(m.制限ターン||20),description:null,backgroundImage:null});
+router.get('/maps',protect,async(req,res)=>{try{const f=req.query.chapter?{章:Number(req.query.chapter)}:{};res.json({success:true,data:(await Map.find(f).lean()).map(mapOut)});}catch(e){res.status(500).json({success:false,message:e.message});}});
+router.get('/maps/:id',protect,async(req,res)=>{try{const m=await Map.findOne({ID:req.params.id}).lean();if(!m)return res.status(404).json({success:false,message:'マップが見つかりません'});res.json({success:true,data:mapOut(m)});}catch(e){res.status(500).json({success:false,message:e.message});}});
+router.post('/start',protect,async(req,res)=>{try{const p=await Player.findOne({userId:req.user._id});if(!p)return res.status(404).json({success:false,message:'プレイヤーデータがありません'});const ids=req.body.catIds?.length?req.body.catIds:p.currentTeam;if(!ids?.length)return res.status(400).json({success:false,message:'出撃する猫がありません'});if(p.energy<10)return res.status(400).json({success:false,message:'エネルギー不足です'});const m=req.body.mapId?await Map.findOne({ID:req.body.mapId}).lean():null;const owned=p.ownedCats.filter(x=>ids.includes(x.catId));const bases=await Cat.find({ID:{$in:owned.map(x=>x.catId)}}).lean();const pc=owned.map(o=>{const b=bases.find(x=>x.ID===o.catId);return b?cat(b,o.level):null}).filter(Boolean);const enemyIds=m?String(m.敵IDリスト||'').split(',').map(x=>x.trim()).filter(Boolean):[];const es=await Enemy.find({ID:{$in:enemyIds}}).lean();const enemies=es.map(e=>({id:e.ID,name:e.名前,rarity:e.タイプ||'normal',level:Number(m?.敵レベル||1),attack:Number(e.攻撃力||0),defense:Number(e.防御力||0),health:Number(e.体力||1),currentHealth:Number(e.体力||1),speed:Number(e.速度||1),skills:[]}));const b=await Battle.create({userId:req.user._id,mapId:req.body.mapId||null});p.energy-=10;p.progress={...(p.progress||{}),battleCount:Number(p.progress?.battleCount||0)+1};await p.save();res.status(201).json({success:true,data:{battleId:String(b._id),playerCats:pc,enemyCats:enemies,map:m?mapOut(m):null}});}catch(e){res.status(500).json({success:false,message:e.message});}});
+router.post('/:id/action',protect,async(req,res)=>{try{const b=await Battle.findOne({_id:req.params.id,userId:req.user._id});if(!b)return res.status(404).json({success:false,message:'バトルが見つかりません'});const a=req.body;const damage=Math.max(0,Number(a.damage||0));const action={roundNumber:Number(a.roundNumber||1),attackerId:a.attackerId||null,targetId:a.targetId||null,skillId:a.skillId||null,damage,isCritical:Boolean(a.isCritical)};res.json({success:true,data:{roundNumber:action.roundNumber,actions:[action],playerCats:[],enemyCats:[],battleContinues:true}});}catch(e){res.status(500).json({success:false,message:e.message});}});
+router.post('/:id/complete',protect,async(req,res)=>{try{const b=await Battle.findOne({_id:req.params.id,userId:req.user._id});if(!b)return res.status(404).json({success:false,message:'バトルが見つかりません'});if(b.endedAt)return res.status(400).json({success:false,message:'完了済みです'});const p=await Player.findOne({userId:req.user._id});const win=req.body.victory!==false;const m=b.mapId?await Map.findOne({ID:b.mapId}).lean():null;const exp=win?Number(m?.獲得経験値||0):0,points=win?Number(m?.獲得ポイント||0):0;b.result=win?'win':'lose';b.score=points;b.rewards={nyankoPoints:points,items:[],newCats:[]};b.endedAt=new Date();await b.save();p.points+=points;p.progress={...(p.progress||{}),experience:Number(p.progress?.experience||0)+exp,winCount:Number(p.progress?.winCount||0)+(win?1:0),loseCount:Number(p.progress?.loseCount||0)+(win?0:1),totalDamageDealt:Number(p.progress?.totalDamageDealt||0)+Number(req.body.damageDealt||0),totalDamageTaken:Number(p.progress?.totalDamageTaken||0)+Number(req.body.damageTaken||0)};await p.save();res.json({success:true,data:{victory:win,damageDealt:Number(req.body.damageDealt||0),damageTaken:Number(req.body.damageTaken||0),rewards:{nyankoPoints:points,items:[],newCats:[]},experienceGained:exp,playerLeveledUp:false,newPlayerLevel:Number(p.progress?.level||1)}});}catch(e){res.status(500).json({success:false,message:e.message});}});
+module.exports=router;
