@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Player = require('../models/Player');
+const { protect } = require('../middleware/auth');
 
 const tokenFor = (user) => jwt.sign(
     { id: user._id, role: user.role },
@@ -11,17 +12,11 @@ const tokenFor = (user) => jwt.sign(
 );
 
 const playerResponse = (player, user) => ({
-    id: String(player._id),
-    username: user.username,
-    level: Number(player.progress?.level || 1),
-    experience: Number(player.progress?.experience || 0),
-    nyankoPoints: Number(player.points || 0),
-    energy: Number(player.energy || 0),
-    maxEnergy: 100,
-    gems: Number(player.progress?.gems || 0),
-    battleCount: Number(player.progress?.battleCount || 0),
-    winCount: Number(player.progress?.winCount || 0),
-    loseCount: Number(player.progress?.loseCount || 0),
+    id: String(player._id), username: user.username,
+    level: Number(player.progress?.level || 1), experience: Number(player.progress?.experience || 0),
+    nyankoPoints: Number(player.points || 0), energy: Number(player.energy || 0), maxEnergy: 100,
+    gems: Number(player.progress?.gems || 0), battleCount: Number(player.progress?.battleCount || 0),
+    winCount: Number(player.progress?.winCount || 0), loseCount: Number(player.progress?.loseCount || 0),
     gachaCount: Number(player.progress?.gachaCount || 0),
     lastEnergyUpdate: player.updatedAt?.toISOString?.() || new Date().toISOString(),
     createdAt: player.createdAt?.toISOString?.() || new Date().toISOString(),
@@ -35,8 +30,7 @@ router.post('/register', async (req, res) => {
         if (await User.findOne({ $or: [{ email }, { username }] })) return res.status(400).json({ success: false, message: '既に存在するユーザーです' });
         const user = await User.create({ username, email, password });
         const player = await Player.create({ userId: user._id, name: username, points: 1000, energy: 100, ownedCats: [{ catId: 'cat001', level: 1 }] });
-        const token = tokenFor(user);
-        res.status(201).json({ success: true, message: '登録が完了しました', data: { token, player: playerResponse(player, user) } });
+        res.status(201).json({ success: true, message: '登録が完了しました', data: { token: tokenFor(user), player: playerResponse(player, user) } });
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
@@ -44,7 +38,7 @@ router.post('/login', async (req, res) => {
     try {
         const { email, password, username } = req.body;
         const user = email
-            ? await User.findOne({ email })
+            ? await User.findOne({ email }).select('+password')
             : await User.findByUsernameWithPassword(username);
         if (!user || !(await user.comparePassword(password))) return res.status(401).json({ success: false, message: 'メールアドレスまたはパスワードが違います' });
         user.lastLogin = Date.now();
@@ -55,7 +49,7 @@ router.post('/login', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-router.get('/profile', require('../middleware/auth').protect, async (req, res) => {
+router.get('/profile', protect, async (req, res) => {
     try {
         const player = await Player.findOne({ userId: req.user._id });
         if (!player) return res.status(404).json({ success: false, message: 'プレイヤーデータがありません' });
