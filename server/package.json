@@ -1,13 +1,14 @@
 {
-  "name": "server",
+  "name": "nyankowars-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "NyankoWars API server",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "check": "node --check index.js && node --check middleware/auth.js && node --check routes/auth.js && node --check routes/player.js && node --check routes/battle.js && node --check routes/gacha.js && node --check routes/data.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["nyankowars", "api", "express", "mongodb"],
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
