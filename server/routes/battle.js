@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../middleware/auth');
 const Battle = require('../models/Battle');
 const Player = require('../models/Player');
-const Map = require('../models/Map');
+const MapModel = require('../models/Map');
 const Enemy = require('../models/Enemy');
 const Cat = require('../models/Cat');
 
@@ -49,7 +49,7 @@ const finiteNonNegative = value => Number.isFinite(Number(value)) && Number(valu
 router.get('/maps', protect, async (req, res) => {
     try {
         const filter = req.query.chapter ? { 章: Number(req.query.chapter) } : {};
-        res.json({ success: true, data: (await Map.find(filter).lean()).map(mapOut) });
+        res.json({ success: true, data: (await MapModel.find(filter).lean()).map(mapOut) });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
@@ -57,7 +57,7 @@ router.get('/maps', protect, async (req, res) => {
 
 router.get('/maps/:id', protect, async (req, res) => {
     try {
-        const map = await Map.findOne({ ID: req.params.id }).lean();
+        const map = await MapModel.findOne({ ID: req.params.id }).lean();
         if (!map) return res.status(404).json({ success: false, message: 'マップが見つかりません' });
         res.json({ success: true, data: mapOut(map) });
     } catch (e) {
@@ -72,7 +72,7 @@ router.post('/start', protect, async (req, res) => {
 
         let map = null;
         if (req.body?.mapId) {
-            map = await Map.findOne({ ID: req.body.mapId }).lean();
+            map = await MapModel.findOne({ ID: req.body.mapId }).lean();
             if (!map) return res.status(404).json({ success: false, message: 'マップが見つかりません' });
         }
 
@@ -83,7 +83,7 @@ router.post('/start', protect, async (req, res) => {
         if (!ids.length) return res.status(400).json({ success: false, message: '出撃する猫がありません' });
         if (ids.length > 5) return res.status(400).json({ success: false, message: '出撃できる猫は5体までです' });
 
-        const ownedById = new Map(player.ownedCats.map(x => [String(x.catId), x]));
+        const ownedById = new globalThis.Map(player.ownedCats.map(x => [String(x.catId), x]));
         const invalidIds = ids.filter(id => !ownedById.has(id));
         if (invalidIds.length) {
             return res.status(400).json({ success: false, message: '未所持の猫が編成に含まれています' });
@@ -191,7 +191,7 @@ router.post('/:id/complete', protect, async (req, res) => {
         if (!player) return res.status(404).json({ success: false, message: 'プレイヤーデータがありません' });
 
         const win = req.body.victory;
-        const map = battle.mapId ? await Map.findOne({ ID: battle.mapId }).lean() : null;
+        const map = battle.mapId ? await MapModel.findOne({ ID: battle.mapId }).lean() : null;
         if (battle.mapId && !map) return res.status(500).json({ success: false, message: 'マップデータが見つかりません' });
 
         const exp = win ? Number(map?.獲得経験値 || 0) : 0;
