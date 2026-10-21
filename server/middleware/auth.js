@@ -1,6 +1,14 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+const jwtSecret = () => {
+    const secret = process.env.JWT_SECRET;
+    if (!secret && process.env.NODE_ENV === 'production') {
+        throw new Error('JWT_SECRET is required in production');
+    }
+    return secret || 'nyanko_dev_secret_change_me';
+};
+
 const protect = async (req, res, next) => {
     try {
         const header = req.headers.authorization || '';
@@ -8,12 +16,14 @@ const protect = async (req, res, next) => {
             return res.status(401).json({ success: false, message: '認証が必要です' });
         }
 
-        const token = header.slice(7);
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'nyanko_secret');
+        const token = header.slice(7).trim();
+        if (!token) return res.status(401).json({ success: false, message: '認証が必要です' });
+
+        const decoded = jwt.verify(token, jwtSecret());
         const user = await User.findById(decoded.id).select('-password');
 
-        if (!user) {
-            return res.status(401).json({ success: false, message: 'ユーザーが見つかりません' });
+        if (!user || !user.isActive) {
+            return res.status(401).json({ success: false, message: 'ユーザーが見つからないか無効です' });
         }
 
         req.user = user;
